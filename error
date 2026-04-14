@@ -1,0 +1,18 @@
+
+│ 
+╵
+╷
+│ Error: A resource with the ID "/subscriptions/c5d43e46-3c8c-44d4-bb60-f3ba38da13ef/resourceGroups/M-CSSPZ-RG-MAN-PRD-002/providers/Microsoft.OperationalInsights/workspaces/R-CSSPZ-LOGS-MAN-PRD-001/savedSearches/ChangeTracking_SoftwareChanges" already exists - to be managed via Terraform this resource needs to be imported into the State. Please see the resource documentation for "azurerm_log_analytics_saved_search" for more information.
+│ 
+│   with azurerm_log_analytics_saved_search.res-11,
+│   on main.tf line 164, in resource "azurerm_log_analytics_saved_search" "res-11":
+│  164: resource "azurerm_log_analytics_saved_search" "res-11" {
+│ 
+╵
+╷
+│ Error: A resource with the ID "/subscriptions/c5d43e46-3c8c-44d4-bb60-f3ba38da13ef/resourceGroups/M-CSSPZ-RG-MAN-PRD-002/providers/Microsoft.OperationalInsights/workspaces/R-CSSPZ-LOGS-MAN-PRD-001/savedSearches/Security_SecurityWarningNotableIssues|ComputersWithSystemAuditPolicyChanges" already exists - to be managed via Terraform this resource needs to be imported into the State. Please see the resource documentation for "azurerm_log_analytics_saved_search" for more information.
+│ 
+│   with azurerm_log_analytics_saved_search.res-91,
+│   on main.tf line 964, in resource "azurerm_log_analytics_saved_search" "res-91":
+│  964: resource "azurerm_log_analytics_saved_search" "res-91" {
+│ 
