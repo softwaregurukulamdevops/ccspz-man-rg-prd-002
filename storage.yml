@@ -1,0 +1,485 @@
+# ------------------------------------------------------------------------------------ #
+# Description:
+#   Pipeline to upload state file
+# ------------------------------------------------------------------------------------ #
+
+trigger: none
+
+pool:
+  name: M-CSSPZ-PBA-MAN-PRD-005
+
+# ============================================================
+# Mandatory Pipeline Parameter (User must enter RG at runtime)
+# ============================================================
+parameters:
+  - name: runBootstrap
+    type: boolean
+    default: false
+
+  - name: resourceGroupName
+    displayName: "Resource Group Name"
+    type: string
+    default: "M-CSSPZ-RG-MAN-PRD-002"
+    # HARD-CODED FOR TESTING
+
+# ============================================================
+# Variables
+# ============================================================
+variables:
+  RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+  RUN_BOOTSTRAP: ${{ parameters.runBootstrap }}
+
+stages:
+
+- stage: InstallAzureCLIandTerraform
+  jobs:
+    - job: InstallCLI
+      steps:
+        - bash: |
+            echo "Detecting OS..."
+            if command -v apt-get >/dev/null 2>&1; then
+              echo "Ubuntu/Debian detected"
+              curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+            elif command -v yum >/dev/null 2>&1; then
+              echo "RHEL/CentOS/Amazon Linux detected"
+              sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
+              sudo yum install -y https://packages.microsoft.com/config/rhel/8/packages-microsoft-prod.rpm || \
+              sudo yum install -y https://packages.microsoft.com/config/amazonlinux/2/packages-microsoft-prod.rpm
+              sudo yum install -y azure-cli
+
+            elif command -v dnf >/dev/null 2>&1; then
+              echo "Fedora/RHEL9 detected"
+              sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
+              sudo dnf install -y https://packages.microsoft.com/config/rhel/9/packages-microsoft-prod.rpm
+              sudo dnf install -y azure-cli
+
+            elif command -v apk >/dev/null 2>&1; then
+              echo "Alpine detected"
+              apk add --no-cache python3 py3-pip
+              pip3 install azure-cli
+
+            else
+              echo "Unknown Linux distribution — cannot auto-install Azure CLI."
+              exit 1
+            fi
+          displayName: "Install Azure CLI"
+
+        - bash: |
+            echo "Verifying Azure CLI..."
+            az --version
+          displayName: "Verify Azure CLI"
+
+        - bash: |
+            echo "Installing Terraform..."
+            TERRAFORM_VERSION="1.7.5"  # Specify a stable version
+            
+            # Download Terraform
+            wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+            
+            # Unzip
+            unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+            
+            # Move to bin and make executable
+            sudo mv terraform /usr/local/bin/
+            sudo chmod +x /usr/local/bin/terraform
+            
+            # Clean up
+            rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+            
+            echo "Terraform installed successfully"
+          displayName: "Install Terraform"
+
+        - bash: |
+            echo "Verifying Terraform installation..."
+            terraform version
+            which terraform
+          displayName: "Verify Terraform"
+
+# - stage: UploadStateFile
+#   displayName: UploadStateFile
+#   condition: eq(variables.RUN_BOOTSTRAP, false)
+#   jobs:
+#   - job: uploadstatefile
+#     displayName: uploadstatefile
+#     steps:
+#     - task: AzureCLI@2
+#       inputs:
+#         azureSubscription: R-CSSPZ-MI-MAN-PRD-001
+#         scriptType: 'bash'
+#         scriptLocation: 'inlineScript'
+#         workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002'
+#         inlineScript: |
+#           echo "Switching subscription..."
+#           az account set --subscription "c5d43e46-3c8c-44d4-bb60-f3ba38da13ef"
+
+#           echo "Now logged into target subscription:"
+#           az account show
+
+#           az storage blob upload \
+#             --auth-mode login \
+#             --account-name mcsspzsamanonprod001 \
+#             --container-name tfexport \
+#             --file R-CSSPZ-RG-MAN-NONPRD-002.tfstate \
+#             --name R-CSSPZ-RG-MAN-NONPRD-002.tfstate \
+#             --overwrite true
+#       env:
+#         AZURE_CONFIG_DIR: $(Agent.TempDirectory)/.az
+
+# - stage: Bootstrap
+#   displayName: 'Terraform Bootstrap Stage'
+#   condition: and(
+#     eq(variables.RUN_BOOTSTRAP, true),
+#     eq(variables.RESOURCE_GROUP, 'R-CSSPZ-RG-MAN-NONPRD-001'))
+
+#   jobs:
+#   - job: BootstrapJob
+#     displayName: 'Bootstrap Azure Backend Resources'
+#     steps:    
+#     - task: TerraformCLI@1
+#       displayName: Terraform-Init
+#       inputs:
+#         command: 'init'
+#         workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/bootstrap'
+#         environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#         provider: 'azurerm'
+#       env:
+#         ARM_SKIP_CLI: true
+#         ARM_USE_AZUREAD: true      
+#         ARM_USE_MSI: false
+
+#     - bash: |
+#         echo "Checking if RG exists..."
+#         az group show --name "R-CSSPZ-RG-MAN-NONPRD-001" >/dev/null 2>&1
+#         if [ $? -eq 0 ]; then
+#           echo "##vso[task.setvariable variable=RG_EXISTS]true"
+#         else
+#           echo "##vso[task.setvariable variable=RG_EXISTS]false"
+#         fi
+#       displayName: "Detect Existing Backend RG"
+    
+#     - bash: |
+#         if [ "$(RG_EXISTS)" = "true" ]; then
+#           echo "Importing existing backend..."
+#           terraform import azurerm_resource_group.res-0 "/subscriptions/c5d43e46-3c8c-44d4-bb60-f3ba38da13ef/resourceGroups/R-CSSPZ-RG-MAN-NONPRD-001"
+#           terraform import azurerm_storage_account.res-1 "/subscriptions/c5d43e46-3c8c-44d4-bb60-f3ba38da13ef/resourceGroups/R-CSSPZ-RG-MAN-NONPRD-001/providers/Microsoft.Storage/storageAccounts/mcsspzsamanonprod001"
+#           terraform import azurerm_storage_container.res-2 "https://mcsspzsamanonprod001.blob.core.windows.net/tfexport"
+#           terraform import azurerm_subnet.pe_subnet "/subscriptions/6088f278-2d38-4bdd-9e08-e5417d44af11/resourceGroups/M-CSSPZ-RG-MAN-PRD-001/providers/Microsoft.Network/virtualNetworks/M-CSSPZ-VNET-MAN-PRD-001/subnets/R-CSSPZ-SNET-MAN-NONPRD-PE-001"
+#         else
+#           echo "Skipping import — backend does not exist."
+#         fi
+#       condition: eq(variables.RG_EXISTS, true)
+#       workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/bootstrap'
+#       displayName: "Import Backend Resources if they Exist"
+#       env:
+#           ARM_USE_MSI: true
+#           ARM_USE_AZUREAD: true 
+#           ARM_SKIP_CLI: true
+
+#     - task: TerraformCLI@1
+#       condition: eq(variables.RG_EXISTS, false)
+#       displayName: Terraform Plan
+#       inputs:
+#         command: 'plan'
+#         workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/bootstrap'
+#         environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#         provider: 'azurerm'
+#       env:
+#         ARM_SKIP_CLI: true
+#         ARM_USE_AZUREAD: true       
+#         ARM_USE_MSI: false
+
+#     - task: TerraformCLI@1
+#       condition: eq(variables.RG_EXISTS, false)
+#       displayName: Terraform-Apply
+#       inputs:
+#         command: 'apply'
+#         workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/bootstrap'
+#         environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#         allowTelemetryCollection: false
+#         provider: 'azurerm'
+#         commandOptions: '-auto-approve'
+#       env:
+#         ARM_SKIP_CLI: true
+#         ARM_USE_AZUREAD: true        
+#         ARM_USE_MSI: false
+
+
+#   # Terraform OUTPUT (write to file as JSON)
+#     - task: TerraformCLI@1
+#       name: CaptureOutput
+#       displayName: "Terraform Output (Capture)"
+#       inputs:
+#         provider: 'azurerm'
+#         command: 'output'
+#         workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/bootstrap'
+#         environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#         # outputAsJSON: true
+#       env:
+#         ARM_SKIP_CLI: true
+#         ARM_USE_AZUREAD: true        
+#         ARM_USE_MSI: false
+  
+#   #   # Convert outputs to pipeline variables
+#   #   - powershell: |
+#   #       $json = Get-Content "$(Agent.TempDirectory)/terraform_output.json" | ConvertFrom-Json
+#   #       Write-Host "##vso[task.setvariable variable=backend_rg]$($json.resource_group_name.value)"
+#   #       Write-Host "##vso[task.setvariable variable=backend_sa]$($json.storage_account_name.value)"
+#   #       Write-Host "##vso[task.setvariable variable=backend_container]$($json.container_name.value)"
+#   #     displayName: "Inject Bootstrap Outputs into Pipeline Variables"
+
+# - stage: ApplyBootstrapBackend
+#   displayName: ApplyBootstrapBackend 
+#   dependsOn: Bootstrap
+#   condition: and(
+#     eq(variables.RUN_BOOTSTRAP, true),
+#     eq(variables.RESOURCE_GROUP, 'R-CSSPZ-RG-MAN-NONPRD-001'))
+  
+#   jobs:
+#   - deployment: TerraformApply
+#     displayName: ApplyBootstrapBackend
+#     environment: 'production'
+#     strategy: 
+#       runOnce:
+#         deploy:
+#           steps:
+#           - bash: |
+#               echo "Checking if bootstrap backend variables exist..."
+#               if [ -n "$(backend_rg)" ]; then
+#                 echo "Bootstrap backend variables FOUND — generating backend.tf"
+
+#               cat <<EOF > $(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/infrastructure/backend.tf
+#               terraform {
+#                 backend "azurerm" {
+#                   resource_group_name  = "$(backend_rg)"
+#                   storage_account_name = "$(backend_sa)"
+#                   container_name       = "$(backend_container)"
+#                   key                  = "R-CSSPZ-RG-MAN-NONPRD-002.tfstate"
+#                 }
+#               }
+#               EOF
+#             displayName: "Create backend.tf (from bootstrap outputs)"
+
+#           - task: TerraformCLI@1
+#             displayName: Terraform-Init
+#             inputs:
+#               provider: 'azurerm'
+#               command: 'init'
+#               workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/infrastructure'
+#               environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#             env:
+#               ARM_SUBSCRIPTION_ID: 'c5d43e46-3c8c-44d4-bb60-f3ba38da13ef'
+#               ARM_SKIP_CLI: true
+#               ARM_USE_AZUREAD: true              
+#               ARM_USE_MSI: false
+
+#           - task: TerraformCLI@1
+#             displayName: Terraform-Plan
+#             inputs:
+#               provider: 'azurerm'
+#               command: 'plan'
+#               workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/infrastructure'
+#               environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#             env:
+#               ARM_SKIP_CLI: true
+#               ARM_USE_AZUREAD: true              
+#               ARM_USE_MSI: false
+      
+#           - task: TerraformCLI@1
+#             displayName: Terraform-Apply
+#             inputs:
+#               provider: 'azurerm'
+#               command: 'apply'
+#               workingDirectory: '$(System.DefaultWorkingDirectory)/R-CSSPZ-RG-MAN-NONPRD-002/infrastructure'
+#               environmentServiceName: 'R-CSSPZ-MI-MAN-PRD-001'
+#               commandOptions: '-auto-approve'
+#               allowTelemetryCollection: false
+#             env:
+#               ARM_SKIP_CLI: true
+#               ARM_USE_AZUREAD: true              
+#               ARM_USE_MSI: false
+
+#run plan to compare current raw form
+- stage: TerraformPlan
+  displayName: 'Terraform Plan'
+  dependsOn: InstallAzureCLIandTerraform
+  condition: eq(variables.RUN_BOOTSTRAP, false)
+  jobs:
+  - job: TerraformPlan
+    displayName: 'Terraform Plan'
+    steps:
+    - bash: |
+        echo "=========================================="
+        echo "VALIDATING PARAMETERS"
+        echo "=========================================="
+        echo "Resource Group Parameter: $(RESOURCE_GROUP)"
+        echo "Working Directory: $(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)"
+        echo ""
+        
+        if [ -z "$(RESOURCE_GROUP)" ]; then
+          echo "##[error]ERROR: Resource Group Name parameter is EMPTY!"
+          echo "##[error]You must provide a resource group name when running the pipeline."
+          exit 1
+        fi
+        
+        if [ ! -d "$(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)" ]; then
+          echo "##[error]ERROR: Directory does not exist: $(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)"
+          echo ""
+          echo "Available directories:"
+          ls -la $(System.DefaultWorkingDirectory)/
+          exit 1
+        fi
+        
+        echo "✓ Directory exists"
+        echo ""
+        echo "Terraform files found:"
+        ls -la $(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)/*.tf 2>/dev/null || echo "⚠ No .tf files found!"
+      displayName: "Validate Parameters and Directory"
+    
+    - bash: |
+        echo "Verifying Terraform is available..."
+        terraform version || {
+          echo "Terraform not found, installing..."
+          TERRAFORM_VERSION="1.7.5"
+          wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+          unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+          sudo mv terraform /usr/local/bin/
+          sudo chmod +x /usr/local/bin/terraform
+          rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+          terraform version
+        }
+      displayName: "Ensure Terraform is Available"
+    
+    - task: AzureCLI@2
+      displayName: Terraform Init
+      inputs:
+        azureSubscription: 'R-CSSPZ-MI-MAN-PRD-001'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)'
+        inlineScript: |
+          echo "=========================================="
+          echo "DEBUG: Terraform Init"
+          echo "=========================================="
+          echo "Current directory: $(pwd)"
+          echo "Resource Group variable: $(RESOURCE_GROUP)"
+          echo "System.DefaultWorkingDirectory: $(System.DefaultWorkingDirectory)"
+          echo ""
+          echo "Files in current directory:"
+          ls -lah
+          echo ""
+          echo "Terraform files:"
+          ls -lah *.tf
+          echo ""
+          echo "Initializing Terraform..."
+          terraform init -reconfigure \
+            -backend-config="subscription_id=c5d43e46-3c8c-44d4-bb60-f3ba38da13ef" \
+            -backend-config="resource_group_name=R-CSSPZ-RG-MAN-NONPRD-001" \
+            -backend-config="storage_account_name=mcsspzsamanonprod001" \
+            -backend-config="container_name=tfexport" \
+            -backend-config="key=$(RESOURCE_GROUP)-NONPRD.tfstate"
+      env:
+        ARM_SUBSCRIPTION_ID: 'c5d43e46-3c8c-44d4-bb60-f3ba38da13ef'
+        ARM_USE_AZUREAD: 'true'
+        ARM_SKIP_CLI: 'true'
+
+    - task: AzureCLI@2
+      displayName: Terraform Plan
+      inputs:
+        azureSubscription: 'R-CSSPZ-MI-MAN-PRD-001'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)'
+        inlineScript: |
+          echo "=========================================="
+          echo "DEBUG: Terraform Plan"
+          echo "=========================================="
+          echo "Current directory: $(pwd)"
+          echo ""
+          echo "Files in current directory:"
+          ls -lah
+          echo ""
+          echo "Checking if .terraform directory exists:"
+          ls -lah .terraform/ || echo "No .terraform directory found!"
+          echo ""
+          echo "Checking terraform.tfvars file:"
+          if [ -f "terraform.tfvars" ]; then
+            echo "terraform.tfvars found. Contents:"
+            cat terraform.tfvars
+          else
+            echo "⚠ WARNING: terraform.tfvars not found!"
+          fi
+          echo ""
+          echo "Running Terraform plan..."
+          terraform plan -var-file=terraform.tfvars -out=tfplan
+      env:
+        ARM_SUBSCRIPTION_ID: 'c5d43e46-3c8c-44d4-bb60-f3ba38da13ef'
+        ARM_USE_AZUREAD: 'true'
+        ARM_SKIP_CLI: 'true'
+
+- stage: Apply
+  displayName: 'Terraform Apply'
+  dependsOn: TerraformPlan
+  condition: eq(variables.RUN_BOOTSTRAP, false)
+  jobs:
+  - deployment: TerraformApply
+    displayName: 'Terraform Apply'
+    environment: 'production'
+    strategy: 
+      runOnce:
+        deploy:
+          steps:
+          - bash: |
+              echo "Verifying Terraform is available..."
+              terraform version || {
+                echo "Terraform not found, installing..."
+                TERRAFORM_VERSION="1.7.5"
+                wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                sudo mv terraform /usr/local/bin/
+                sudo chmod +x /usr/local/bin/terraform
+                rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                terraform version
+              }
+            displayName: "Ensure Terraform is Available"
+
+          - task: AzureCLI@2
+            displayName: Terraform Init
+            inputs:
+              azureSubscription: 'R-CSSPZ-MI-MAN-PRD-001'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)'
+              inlineScript: |
+                echo "Initializing Terraform for Apply..."
+                terraform init -reconfigure \
+                  -backend-config="subscription_id=c5d43e46-3c8c-44d4-bb60-f3ba38da13ef" \
+                  -backend-config="resource_group_name=R-CSSPZ-RG-MAN-NONPRD-001" \
+                  -backend-config="storage_account_name=mcsspzsamanonprod001" \
+                  -backend-config="container_name=tfexport" \
+                  -backend-config="key=$(RESOURCE_GROUP)-NONPRD.tfstate"
+            env:
+              ARM_SUBSCRIPTION_ID: 'c5d43e46-3c8c-44d4-bb60-f3ba38da13ef'
+              ARM_USE_AZUREAD: 'true'
+              ARM_SKIP_CLI: 'true'
+
+          - task: AzureCLI@2
+            displayName: Terraform Apply (Auto-Approved)
+            inputs:
+              azureSubscription: 'R-CSSPZ-MI-MAN-PRD-001'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/$(RESOURCE_GROUP)'
+              inlineScript: |
+                echo "=========================================="
+                echo "TERRAFORM APPLY - AUTO APPROVED"
+                echo "=========================================="
+                echo "Resource Group: $(RESOURCE_GROUP)"
+                echo "Subscription: c5d43e46-3c8c-44d4-bb60-f3ba38da13ef"
+                echo ""
+                echo "Applying Terraform configuration..."
+                terraform apply -var-file=terraform.tfvars -auto-approve
+            env:
+              ARM_SUBSCRIPTION_ID: 'c5d43e46-3c8c-44d4-bb60-f3ba38da13ef'
+              ARM_USE_AZUREAD: 'true'
+              ARM_SKIP_CLI: 'true'
